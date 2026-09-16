@@ -129,6 +129,39 @@ blob, builds in ~0.5 s, and loads in ~0.5 ms — same answer, ~900× smaller.
 muni → state hierarchy (5 571 leaves) rolls a batch of 50 slices up in ~5.6 ms; with a
 500-slice batch, ~19 ms.
 
+### Tree construction
+
+The synthetic benchmark for [#8](https://github.com/campiohe/geohalo/issues/8)
+compares the previous row-by-row builder with the depth-bounded sparse builder:
+
+```bash
+uv run python -m benchmarks.bias_tree_build
+uv run python -m benchmarks.bias_tree_build --leaves 5570 --fanout 10
+uv run python -m benchmarks.bias_tree_build --leaves 20000 --fanout 10 --repeats 1
+```
+
+Local measurements of complete builds, including validation, ordering, matrix
+assembly, and hashing (but excluding synthetic hierarchy generation). The first
+two tree sizes use medians of three builds; the largest uses one build per mode:
+
+| Leaves | Internal nodes | Mode | Previous build | Sparse build |
+| ---: | ---: | --- | ---: | ---: |
+| 2,862 | 25 | weighted mean | 1.015 s | 0.022 s |
+| 2,862 | 25 | weighted sum | 1.092 s | 0.013 s |
+| 5,573 | 620 | weighted mean | 2.905 s | 0.055 s |
+| 5,573 | 620 | weighted sum | 3.201 s | 0.034 s |
+| 20,003 | 2,223 | weighted mean | 30.307 s | 0.194 s |
+| 20,003 | 2,223 | weighted sum | 29.787 s | 0.142 s |
+
+The benchmark checks exact equality of CSR coefficients, indices, row pointers,
+node keys, and cache digests for both modes. Each hierarchy includes three leaves
+attached directly to the root, exercising unequal leaf depths. Build cost depends
+on depth and the number of contributing leaf–ancestor pairs, not just leaf count.
+
+Environment: Python 3.14.4, NumPy 2.4.6, pandas 3.0.3, SciPy 1.17.1, Intel Core
+Ultra 5 125H in a Linux virtual machine. Timings vary with machine load; these are
+synthetic build measurements, separate from the historical GADM hot-path timings.
+
 ## Caveats
 
 Numbers are point-in-time on the author's machine and vary ±20 % by hardware. Cold-import
