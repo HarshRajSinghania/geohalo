@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reduce temporary memory when applying `ReduceOperator` to large grids
+  ([#5](https://github.com/campiohe/geohalo/issues/5)): gather contributing cells
+  one batch slice at a time and reuse the compact column mapping. Resampling
+  also uses per-slice or bounded-batch products. Both paths handle descending
+  latitudes without sorting the full input and preserve matrix precision.
 - Fix north/south reversal when resampling grids with descending source latitudes
   ([#4](https://github.com/campiohe/geohalo/issues/4)). `Resampler.compute` and
   `FactoredResampler.compute` now store source latitudes ascending and build their

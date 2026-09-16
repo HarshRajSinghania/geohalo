@@ -2,10 +2,12 @@
 
 import hashlib
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
 import scipy.sparse as sp
 
+from geohalo._sparse import GridMatrix
 from geohalo.geometry import bilinear_matrix_1d, ensure_ascending_lats, nearest_index
 
 
@@ -24,6 +26,18 @@ class Resampler:
     target_lat: np.ndarray
     target_lon: np.ndarray
     digest: bytes
+
+    @cached_property
+    def _grid_matrix(self) -> GridMatrix:
+        return GridMatrix(self.transform_matrix, (self.source_lat.size, self.source_lon.size))
+
+    def apply_grid(self, values: np.ndarray, *, descending: bool = False) -> np.ndarray:
+        """Transform (..., latitude, longitude) values into (..., n_target).
+
+        ``descending=True`` interprets source rows in descending latitude order.
+        Temporary dense allocations are bounded per slice or small batch block.
+        """
+        return self._grid_matrix.apply(values, descending=descending)
 
     def __repr__(self) -> str:
         return (

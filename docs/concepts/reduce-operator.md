@@ -73,8 +73,8 @@ iterations=3. The fused ReduceOperator is 0.40 MB, builds in ~0.5 s, and loads i
 
 `ReduceOperator.compute(stencil, source_lat, source_lon, iterations=…)` returns the
 stencil's own matrix unchanged when the source grid already matches the stencil grid
-(no resample needed), and otherwise calls `fuse_left`. Applying it is a single matmul on
-the source grid:
+(no resample needed), and otherwise calls `fuse_left`. Applying it uses this fused
+matrix directly on the source grid:
 
 ```python
 import geohalo as ghl
@@ -90,6 +90,24 @@ out = ghl.reduce_with_operator(da, op)     # (..., geom); also accepts how="sum"
     in a fixed normaliser and cannot renormalise per cell. For missing values or
     per-cell weights, use [`reduce_with_stencil`](masked.md), which keeps the resampler
     factored and renormalises each slice.
+
+## Application memory
+
+`reduce_with_operator` reads values in their stored latitude order. For large
+grids, it gathers the source cells referenced by the matrix and applies one
+sparse-vector product per batch slice. The compact column mapping is prepared
+once per operator instance and reused, including across Dataset variables.
+Operators that touch most cells use the full source slice. Small contiguous grids
+use bounded batches to keep multiplication overhead low.
+
+Temporary dense storage therefore depends on one slice's contributing cells,
+rather than the total number of slices. The original matrix coefficient order
+and float64 precision are preserved, including for float32 input. Canonical
+matrices and disk/Redis cache payloads retain their existing format.
+
+This bounds the arithmetic's temporary memory; lazy inputs are still loaded in
+full by the xarray entry point. Reading only relevant storage chunks is separate
+work tracked in [#6](https://github.com/campiohe/geohalo/issues/6).
 
 ## It's already your fast path
 

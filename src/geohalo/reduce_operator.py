@@ -14,11 +14,13 @@ magnitude smaller than ``T`` and its size is independent of the iteration count.
 
 import hashlib
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from geohalo._sparse import GridMatrix
 from geohalo.geometry import ensure_ascending_lats, grid_digest, same_grid
 from geohalo.resampler import FactoredResampler
 from geohalo.stencil import Stencil
@@ -52,6 +54,19 @@ class ReduceOperator:
     source_lon: np.ndarray
     iterations: int
     digest: bytes
+
+    @cached_property
+    def _grid_matrix(self) -> GridMatrix:
+        return GridMatrix.for_reduction(self.matrix, (self.source_lat.size, self.source_lon.size))
+
+    def apply_grid(self, values: np.ndarray, *, descending: bool = False) -> np.ndarray:
+        """Project (..., latitude, longitude) values without normalising rows.
+
+        Large grids gather only referenced cells, one batch slice at a time.
+        ``descending=True`` interprets source rows in descending latitude order.
+        The canonical matrix and its arithmetic precision are unchanged.
+        """
+        return self._grid_matrix.apply(values, descending=descending)
 
     def __repr__(self) -> str:
         return (

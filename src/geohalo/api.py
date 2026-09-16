@@ -72,17 +72,9 @@ def _apply_matrix_da(
             f"grid ({source_lat.size}, {source_lon.size}) does not match the resampler's source grid "
             f"({resampler.source_lat.size}, {resampler.source_lon.size})",
         )
-    if descending:
-        da = da.sortby(lat_dim)
     batch_dims = [d for d in da.dims if d not in (lat_dim, lon_dim)]
     arr = da.transpose(*batch_dims, lat_dim, lon_dim).to_numpy()
-    n_lat_src, n_lon_src = arr.shape[-2:]
-    flat = arr.reshape(-1, n_lat_src * n_lon_src)
-    # flat @ matrix.T keeps the dense operand C-contiguous; (matrix @ flat.T).T would hand
-    # scipy an F-contiguous operand it may copy. Benchmarks show the two are close at the
-    # shapes we hit, so this is a tidy-default rather than a hot-spot. np.asarray guards
-    # against scipy returning an np.matrix.
-    out_flat = np.asarray(flat @ resampler.transform_matrix.T)
+    out_flat = resampler.apply_grid(arr, descending=descending)
     out_lat, out_lon = resampler.target_lat, resampler.target_lon
     out = out_flat.reshape(*arr.shape[:-2], out_lat.size, out_lon.size)
     return xr.DataArray(
@@ -140,10 +132,12 @@ def reduce_with_operator[T: xr.DataArray | xr.Dataset](
     lon_dim: str = "longitude",
     geom_dim: str = "geom",
 ) -> T:
-    """Reduce ``grid`` to per-polygon values with one fused matmul on the source grid.
+    """Reduce ``grid`` to per-polygon values using the fused source-grid operator.
 
     Assumes clean (non-NaN, unweighted) data — the fused operator cannot
     renormalise per cell. For NaN or per-cell weighting, use ``reduce_with_stencil``.
+    Large grids gather contributing cells per batch slice, retaining the
+    operator's precision without copying or upcasting the entire batch.
     """
     if how not in ("mean", "sum"):
         raise ValueError(f"how must be 'mean' or 'sum', got {how!r}")
@@ -156,10 +150,7 @@ def reduce_with_operator[T: xr.DataArray | xr.Dataset](
         )
 
     _require_spatial_dims(grid, lat_dim, lon_dim)
-    lat = grid[lat_dim].to_numpy()
-    if lat.size > 1 and lat[0] > lat[-1]:
-        grid = grid.sortby(lat_dim)
-    da_lat = grid[lat_dim].to_numpy()
+    da_lat, descending = ensure_ascending_lats(grid[lat_dim].to_numpy())
     da_lon = grid[lon_dim].to_numpy()
     if not same_grid(da_lat, da_lon, operator.source_lat, operator.source_lon):
         raise ValueError(
@@ -168,14 +159,11 @@ def reduce_with_operator[T: xr.DataArray | xr.Dataset](
         )
     batch_dims = [d for d in grid.dims if d not in (lat_dim, lon_dim)]
     arr = grid.transpose(*batch_dims, lat_dim, lon_dim).to_numpy()
-    flat = arr.reshape(-1, arr.shape[-2] * arr.shape[-1])
-    # flat @ M.T keeps the dense operand C-contiguous (see _apply_matrix_da for the rationale).
-    proj = np.asarray(flat @ operator.matrix.T)
+    proj = operator.apply_grid(arr, descending=descending)
     if how == "mean":
-        proj = proj / operator.row_sums[None, :]
-    out = proj.reshape(*arr.shape[:-2], len(operator.keys))
+        proj = proj / operator.row_sums
     return xr.DataArray(
-        out,
+        proj,
         dims=(*batch_dims, geom_dim),
         coords={**_carryover_coords(grid, batch_dims), geom_dim: _geom_coord(operator.keys, geom_dim)},
         name=grid.name,
