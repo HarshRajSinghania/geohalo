@@ -1,4 +1,4 @@
-"""LocalCache / RedisCache for Stencil, Resampler, BiasTree, and ReduceOperator.
+"""LocalCache / RedisCache for precomputed geometry and grid operators.
 
 Every cache key is derived from the *inputs* (via the ``*_digest`` helpers) so a
 hit returns the stored object without ever running the expensive build. The two
@@ -27,12 +27,14 @@ else:
 from geohalo.bias_tree import BiasTree, tree_digest
 from geohalo.reduce_operator import ReduceOperator, reduce_operator_digest
 from geohalo.resampler import Resampler, resampler_digest
+from geohalo.restricted_operator import ChunkSizes, RestrictedOperator, restricted_operator_digest
 from geohalo.stencil import Stencil, stencil_digest
 
 STENCIL_PREFIX = "geohalo:stencil:v1"
 RESAMPLER_PREFIX = "geohalo:resampler:v1"
 TREE_PREFIX = "geohalo:tree:v1"
 REDUCE_OP_PREFIX = "geohalo:reduceop:v1"
+RESTRICTED_OP_PREFIX = "geohalo:restrictedop:v1"
 PAYLOAD_VERSION = 1
 
 # namespace -> Redis key prefix; LocalCache uses the namespace directly as a subdir.
@@ -41,6 +43,7 @@ _REDIS_PREFIXES = {
     "resampler": RESAMPLER_PREFIX,
     "tree": TREE_PREFIX,
     "reduceop": REDUCE_OP_PREFIX,
+    "restrictedop": RESTRICTED_OP_PREFIX,
 }
 
 
@@ -180,6 +183,43 @@ def _deser_reduce_op(blob: bytes) -> ReduceOperator:
     )
 
 
+def _ser_restricted_op(operator: RestrictedOperator) -> bytes:
+    return pk.dumps(
+        {
+            "version": PAYLOAD_VERSION,
+            "windows": operator.windows,
+            "gathers": operator.gathers,
+            "matrix": _csr_payload(operator.matrix),
+            "row_sums": operator.row_sums,
+            "keys": _index_payload(operator.keys),
+            "source_lat": operator.source_lat,
+            "source_lon": operator.source_lon,
+            "lat_chunks": operator.lat_chunks,
+            "lon_chunks": operator.lon_chunks,
+            "digest": operator.digest,
+        },
+        protocol=pk.HIGHEST_PROTOCOL,
+    )
+
+
+def _deser_restricted_op(blob: bytes) -> RestrictedOperator:
+    payload = pk.loads(blob)
+    if payload.get("version") != PAYLOAD_VERSION:
+        raise ValueError(f"unsupported restricted-operator payload version: {payload.get('version')!r}")
+    return RestrictedOperator(
+        windows=tuple(payload["windows"]),
+        gathers=tuple(np.asarray(gather) for gather in payload["gathers"]),
+        matrix=_csr_from_payload(payload["matrix"]),
+        row_sums=np.asarray(payload["row_sums"]),
+        keys=_index_from_payload(payload["keys"]),
+        source_lat=np.asarray(payload["source_lat"]),
+        source_lon=np.asarray(payload["source_lon"]),
+        lat_chunks=tuple(payload["lat_chunks"]),
+        lon_chunks=tuple(payload["lon_chunks"]),
+        digest=payload["digest"],
+    )
+
+
 class _Cache:
     """Get-or-compute logic shared by both backends.
 
@@ -287,6 +327,23 @@ class _Cache:
             _ser_reduce_op,
             _deser_reduce_op,
             force_recompute,
+        )
+
+    def get_or_compute_restricted_operator(
+        self,
+        operator: ReduceOperator,
+        source_lat: np.ndarray,
+        lat_chunks: ChunkSizes,
+        lon_chunks: ChunkSizes,
+        *,
+        force_recompute: bool = False,
+    ) -> RestrictedOperator:
+        """Cache a read plan for a fused operator, stored latitude order, and layout."""
+        digest = restricted_operator_digest(operator, source_lat, lat_chunks, lon_chunks)
+        return self._get_or_compute(
+            "restrictedop", digest,
+            lambda: RestrictedOperator.compute(operator, source_lat, lat_chunks, lon_chunks),
+            _ser_restricted_op, _deser_restricted_op, force_recompute,
         )
 
 
