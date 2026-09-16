@@ -79,3 +79,24 @@ The correction lives entirely inside the [stencil](stencil.md) build — it is p
 the precompute, so it costs nothing at apply time. The `spherical_correction` flag is
 also mixed into the stencil's [cache digest](../guides/caching.md) (`b"sph"` vs
 `b"flat"`), so a spherical stencil and a planar one never collide in the cache.
+
+
+## Polygon area on the same sphere
+
+Grid cells are not the only thing that needs this measure. A zone's own area —
+to store, to report, or to turn occupancy into a coverage fraction — has to
+live on the same sphere and radius as `cell_areas`. Shapely's `area` is in
+square degrees; ellipsoidal geography APIs are a third answer.
+
+`geohalo.geometry.polygon_areas(geoms)` integrates `sin φ` along each ring and
+treats edges as straight in longitude. That is exact for a lat/lon box and is
+the same quantity the stencil weights already use:
+
+```python
+from geohalo.geometry import polygon_areas
+
+area_m2 = polygon_areas(geoms)          # same R as cell_areas
+```
+
+Holes are subtracted; multipolygons sum their parts. Pass `spherical=False`
+for Shapely's planar area in the geometry's coordinate units.
