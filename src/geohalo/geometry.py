@@ -76,6 +76,62 @@ def cell_areas(lats: np.ndarray, lons: np.ndarray, *, spherical: bool = True) ->
     return area_per_lat[:, None] * dlon_rad[None, :]
 
 
+def _ring_spherical_integral(coords: np.ndarray) -> float:
+    """∫ sinφ dλ along a lon/lat ring (radians after conversion).
+
+    Edges are treated as straight in longitude. Exact for a lat/lon box —
+    the same measure `cell_areas` uses.
+    """
+    coords = np.asarray(coords, dtype=np.float64)
+    if coords.shape[0] < 4:
+        return 0.0
+    lon = np.deg2rad(coords[:, 0])
+    lat = np.deg2rad(coords[:, 1])
+    dlon = np.diff(lon)
+    dlon = (dlon + np.pi) % (2.0 * np.pi) - np.pi
+    return float(0.5 * np.sum(dlon * (np.sin(lat[1:]) + np.sin(lat[:-1]))))
+
+
+def _polygon_spherical_steradians(geom) -> float:
+    """Unsigned steradians of a Polygon or MultiPolygon on the unit sphere."""
+    if geom is None or geom.is_empty:
+        return 0.0
+    kind = geom.geom_type
+    if kind == "Polygon":
+        exterior = abs(_ring_spherical_integral(np.asarray(geom.exterior.coords)))
+        holes = sum(abs(_ring_spherical_integral(np.asarray(h.coords))) for h in geom.interiors)
+        return max(exterior - holes, 0.0)
+    if kind == "MultiPolygon":
+        return sum(_polygon_spherical_steradians(part) for part in geom.geoms)
+    if kind == "GeometryCollection":
+        return sum(_polygon_spherical_steradians(part) for part in geom.geoms)
+    return 0.0
+
+
+def polygon_areas(geoms, *, spherical: bool = True) -> np.ndarray:
+    """Per-polygon area on the same sphere (and radius) as `cell_areas`.
+
+    `spherical=True` (default) integrates sin(latitude) and treats edges as
+    straight in longitude — exact for a lat/lon box, so a zone's area and
+    `stencil.occupancy_matrix.sum(axis=1)` are the same physical measure.
+    Units are m². `spherical=False` returns Shapely's planar area in the
+    geometry's coordinate units (square degrees on EPSG:4326).
+    """
+    if isinstance(geoms, gpd.GeoSeries):
+        arr = geoms.to_numpy()
+    else:
+        arr = np.asarray(geoms, dtype=object)
+    out = np.empty(arr.size, dtype=np.float64)
+    if not spherical:
+        for i, g in enumerate(arr):
+            out[i] = 0.0 if g is None or g.is_empty else float(g.area)
+        return out
+    r2 = EARTH_RADIUS_M ** 2
+    for i, g in enumerate(arr):
+        out[i] = r2 * _polygon_spherical_steradians(g)
+    return out
+
+
 def grid_digest(lats: np.ndarray, lons: np.ndarray) -> bytes:
     """SHA-256 over canonical lat/lon bytes + EPSG tag (no spherical flag)."""
     h = hashlib.sha256()
