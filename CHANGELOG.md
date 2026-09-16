@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Accelerate `BiasTree.compute` with depth-bounded sparse products instead of
+  composing internal nodes one sparse row at a time
+  ([#8](https://github.com/campiohe/geohalo/issues/8)). Weighted means and sums,
+  node ordering, hierarchy validation, and existing cache entries are preserved.
 - Accelerate stencil construction by passing vectorised WKB geometries directly
   to exactextract and reusing those bytes for the geometry digest
   ([#7](https://github.com/campiohe/geohalo/issues/7)). Coverage matrices, polygon

@@ -35,10 +35,25 @@ flowchart TD
     RJ --> BR
 ```
 
-`BiasTree.compute` builds \(\mathbf{R}\) bottom-up: it sorts nodes by depth, seeds leaf
-rows with identity, then for each internal node sums its children's already-built rows
-scaled by `w/total` (mean) or `w` (sum). Because children are always shallower than their
-parents, one pass suffices.
+`BiasTree.compute` builds a sparse adjacency matrix \(\mathbf{A}\), with each
+parent–child entry set to `w/total` (mean) or `w` (sum), and a rectangular identity
+\(\mathbf{L}\) that selects the leaves. Starting from \(\mathbf{R}_0=\mathbf{L}\),
+it computes
+
+\[
+\mathbf{R}_{k+1} = \mathbf{L} + \mathbf{A}\,\mathbf{R}_k.
+\]
+
+Each sparse product propagates leaf contributions one edge toward the roots.
+After as many products as the maximum leaf-to-root depth, the matrix is complete,
+including leaves attached at different depths and disconnected trees (a forest).
+The iteration count comes from the validated hierarchy, not a floating-point
+convergence test. This avoids repeatedly copying and adding individual sparse
+rows. Build cost still depends on tree depth and the number of leaf–ancestor
+coefficients in the result; very deep chains need more products than shallow trees.
+
+Node ordering is unchanged: leaves sorted by `repr`, then internal nodes by
+depth and `repr`. Cache digests and payloads are unchanged as well.
 
 ## Usage
 

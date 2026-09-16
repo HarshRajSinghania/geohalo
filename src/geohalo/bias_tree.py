@@ -71,23 +71,31 @@ class BiasTree:
         internals = sorted((n for n in all_nodes if n not in leaves), key=lambda n: (depth[n], repr(n)))
         nodes_list = sorted_leaves + internals
         node_index = {n: i for i, n in enumerate(nodes_list)}
-        leaf_index = {n: i for i, n in enumerate(sorted_leaves)}
         n_leaves = len(sorted_leaves)
+        n_nodes = len(nodes_list)
 
-        matrix = sp.lil_matrix((len(nodes_list), n_leaves), dtype=np.float64)
-        for leaf, j in leaf_index.items():
-            matrix[node_index[leaf], j] = 1.0
+        rows, cols, scales = [], [], []
         for node in internals:
             entries = children_of[node]
+            # Keep the previous Python-float summation and normalization semantics.
             total = sum(w for _, w in entries)
-            composed = sp.csr_matrix((1, n_leaves), dtype=np.float64)
             for child, w in entries:
-                scale = (w / total) if how == "mean" else w
-                composed = composed + matrix.getrow(node_index[child]) * scale
-            matrix[node_index[node]] = composed
+                rows.append(node_index[node])
+                cols.append(node_index[child])
+                scales.append((w / total) if how == "mean" else w)
+
+        adjacency = sp.csr_matrix((scales, (rows, cols)), shape=(n_nodes, n_nodes))
+        identity = sp.eye(n_nodes, n_leaves, format="csr", dtype=np.float64)
+        matrix = identity
+        # R = L + A @ R. Each product propagates leaf contributions one edge up;
+        # the validated tree's maximum depth is an exact finite iteration bound.
+        # Do not test floating-point equality to terminate (products may overflow).
+        for _ in range(max(depth.values())):
+            matrix = identity + adjacency @ matrix
+        matrix.sort_indices()
 
         return cls(
-            rollup_matrix=matrix.tocsr(),
+            rollup_matrix=matrix,
             keys=_build_keys(nodes_list, edges.index),
             digest=tree_digest(edges, parent_col=parent_col, weight_col=weight_col, how=how),
             how=how,
