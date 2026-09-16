@@ -20,6 +20,8 @@ entry point comes in a **convenience** form (builds the operator for you) and a
 
 ::: geohalo.reduce_with_operator
 
+::: geohalo.reduce_with_restricted_operator
+
 ---
 
 ## Resampling
@@ -43,6 +45,8 @@ entry point comes in a **convenience** form (builds the operator for you) and a
 ::: geohalo.Stencil
 
 ::: geohalo.ReduceOperator
+
+::: geohalo.RestrictedOperator
 
 ::: geohalo.Resampler
 

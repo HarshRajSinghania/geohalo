@@ -5,7 +5,7 @@ The cache is what makes "once" stick across processes, machines, and repeated ru
 
 ## What is worth caching
 
-Four objects are pure functions of their inputs and expensive to build:
+These precomputed objects depend only on their inputs, not on grid values:
 
 | Object           | Depends on                                       | Built by                       |
 | ---------------- | ------------------------------------------------ | ------------------------------ |
@@ -13,6 +13,7 @@ Four objects are pure functions of their inputs and expensive to build:
 | `Resampler`      | source/target coords + iterations                | `get_or_compute_resampler`     |
 | `BiasTree`       | edges + weights + how                            | `get_or_compute_tree`          |
 | `ReduceOperator` | stencil digest + source coords + iterations      | `get_or_compute_reduce_operator` |
+| `RestrictedOperator` | fused operator digest + stored coords + spatial chunks | `get_or_compute_restricted_operator` |
 
 None of them depends on the grid **values** — so a single cached object serves every
 time step, member, and band on that grid.
@@ -41,8 +42,10 @@ invalidation to forget.
 
 The digests are also carefully **canonical**:
 
-- a descending-latitude grid and its ascending twin hash **identically**
-  (latitudes are sorted before hashing);
+- a descending-latitude grid and its ascending twin hash **identically** for
+  canonical grid operators (latitudes are sorted before hashing). A
+  [`RestrictedOperator`](../concepts/restricted-operator.md) instead hashes the
+  stored orientation because its read windows depend on that order;
 - the polygon digest is **order-invariant** (keys are sorted, then `(repr(key),
   WKB(geom))` pairs are hashed), so the order you pass geometries in doesn't matter;
 - the spherical flag is mixed in as `b"sph"` / `b"flat"` so a corrected and an

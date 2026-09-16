@@ -123,6 +123,40 @@ blob, builds in ~0.5 s, and loads in ~0.5 ms — same answer, ~900× smaller.
 ![Materialised resampler vs fused reduce operator](figures/fused-operator-size.png){ width="720" }
 </figure>
 
+## Chunk-aware reads
+
+[`RestrictedOperator`](concepts/restricted-operator.md) addresses the remaining
+full-grid I/O cost for clean lazy inputs. The synthetic
+[#6](https://github.com/campiohe/geohalo/issues/6) benchmark uses a local in-memory
+Zarr v3 store and counts actual data-chunk reads:
+
+```bash
+uv run python -m benchmarks.chunk_reads
+```
+
+For 24 float32 steps on a descending 721 × 1440 grid, 15 polygons in two distant
+regions, and storage chunks of 6 × 64 × 64, a local run measured:
+
+| Path | Data-chunk reads | Compressed payload read | Extra allocation peak | Median time |
+| --- | ---: | ---: | ---: | ---: |
+| Full-grid `reduce_with_operator` | 1,104 | 84.747 MiB | 98.388 MiB | 1.0690 s |
+| `reduce_with_restricted_operator` | 12 | 1.003 MiB | 0.467 MiB | 0.0277 s |
+
+The plan reads two disjoint windows covering 12,288 of 1,038,240 spatial cells
+(1.18%). Every fetched data chunk was read once, and outputs matched exactly in
+this run. The benchmark asserts agreement at `rtol=1e-12`, `atol=1e-12`.
+
+Times are medians of three uninstrumented applications; the extra peak is from
+a separate `tracemalloc` run, not total process RSS. Data generation, store
+creation, coordinate loading, and operator construction are excluded. This is
+local decoding and reduction, **not** a cloud latency measurement. Physical I/O
+also depends on storage chunking, sharding, and any upstream Dask transformations.
+
+Environment: Python 3.14.4, xarray 2026.4.0, Zarr 3.4.0, NumPy 2.4.6, SciPy 1.17.1,
+Intel Core Ultra 5 125H in a Linux virtual machine. The application uses Zarr
+without Dask here; tests also count actual reads through Dask-backed Zarr and
+irregular Dask chunks.
+
 ## Rollups
 
 [Hierarchical rollups](concepts/bias-tree.md) are another matmul. The full GADM Brazil
