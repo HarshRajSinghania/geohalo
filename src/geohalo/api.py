@@ -6,7 +6,6 @@ from typing import Literal
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import scipy.sparse as sp
 import xarray as xr
 
 from geohalo.bias_tree import BiasTree
@@ -60,15 +59,20 @@ def _carryover_coords(src: xr.DataArray, keep_dims: list[str]) -> dict[Hashable,
 
 def _apply_matrix_da(
     da: xr.DataArray,
-    matrix: sp.csr_matrix,
+    resampler: Resampler,
     lat_dim: str,
     lon_dim: str,
-    out_lat: np.ndarray,
-    out_lon: np.ndarray,
 ) -> xr.DataArray:
-    """Apply a (n_target, n_source) sparse matrix over the spatial dims of da."""
-    lat_values = da[lat_dim].to_numpy()
-    if lat_values.size > 1 and lat_values[0] > lat_values[-1]:
+    """Validate the source grid and apply the resampler over the spatial dims."""
+    _require_spatial_dims(da, lat_dim, lon_dim)
+    source_lat, descending = ensure_ascending_lats(da[lat_dim].to_numpy())
+    source_lon = da[lon_dim].to_numpy()
+    if not same_grid(source_lat, source_lon, resampler.source_lat, resampler.source_lon):
+        raise ValueError(
+            f"grid ({source_lat.size}, {source_lon.size}) does not match the resampler's source grid "
+            f"({resampler.source_lat.size}, {resampler.source_lon.size})",
+        )
+    if descending:
         da = da.sortby(lat_dim)
     batch_dims = [d for d in da.dims if d not in (lat_dim, lon_dim)]
     arr = da.transpose(*batch_dims, lat_dim, lon_dim).to_numpy()
@@ -78,7 +82,8 @@ def _apply_matrix_da(
     # scipy an F-contiguous operand it may copy. Benchmarks show the two are close at the
     # shapes we hit, so this is a tidy-default rather than a hot-spot. np.asarray guards
     # against scipy returning an np.matrix.
-    out_flat = np.asarray(flat @ matrix.T)
+    out_flat = np.asarray(flat @ resampler.transform_matrix.T)
+    out_lat, out_lon = resampler.target_lat, resampler.target_lon
     out = out_flat.reshape(*arr.shape[:-2], out_lat.size, out_lon.size)
     return xr.DataArray(
         out,
@@ -96,6 +101,11 @@ def resample_grid_with_matrix[T: xr.DataArray | xr.Dataset](
     lat_dim: str = "latitude",
     lon_dim: str = "longitude",
 ) -> T:
+    """Resample a matching source grid, accepting either latitude orientation.
+
+    Raises ``ValueError`` if the source coordinates differ from the resampler's
+    source grid. Output coordinates follow the resampler's target order.
+    """
     if isinstance(source, xr.Dataset):
         return _map_spatial_vars(
             source,
@@ -103,10 +113,7 @@ def resample_grid_with_matrix[T: xr.DataArray | xr.Dataset](
             lat_dim,
             lon_dim,
         )
-    return _apply_matrix_da(
-        source, resampler.transform_matrix, lat_dim, lon_dim,
-        resampler.target_lat, resampler.target_lon,
-    )
+    return _apply_matrix_da(source, resampler, lat_dim, lon_dim)
 
 
 def resample_grid[T: xr.DataArray | xr.Dataset](
