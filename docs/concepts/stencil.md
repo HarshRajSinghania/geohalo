@@ -25,10 +25,15 @@ flowchart TD
 
 2. **Sort the polygons by key.** `repr(key)` ordering makes the build (and its
    [digest](../guides/caching.md)) independent of the order you passed geometries in.
+   Encode the sorted geometries with one vectorised
+   [`shapely.to_wkb`](https://shapely.readthedocs.io/en/stable/reference/shapely.to_wkb.html)
+   call. The resulting binary geometry bytes serve both extraction and hashing.
 
 3. **Exact coverage.** A `NumPyRasterSource` describes the grid's bounding box;
    [`exact_extract`](https://github.com/isciences/exactextract) returns, for each
    polygon, the list of `cell_id`s it touches and the fraction of each cell covered.
+   A WKB feature source passes the binary geometries directly to exactextract,
+   avoiding Python coordinate lists and GeoJSON encoding/parsing.
    This is the unbiased boundary treatment — see
    [why exact fractional coverage](exact-coverage.md).
 
@@ -88,6 +93,17 @@ their vertex count, since `exactextract` clips every polygon against the raster.
 resulting CSR matrix, by contrast, is tiny (kilobytes to a few megabytes) and is what
 you [cache](../guides/caching.md). See the
 [`Stencil.compute` rows](../performance.md) in the benchmarks.
+
+Detailed boundaries benefit especially from the WKB input path. Reproduce the
+comparison against the previous GeoJSON implementation without downloading data:
+
+```bash
+uv run python -m benchmarks.stencil_build
+```
+
+Both paths include geometry serialization, coverage extraction, CSR assembly,
+and hashing. The benchmark verifies that matrix entries, row sums, polygon keys,
+and digests match exactly.
 
 | n_polygons (Brazil L2) | build time | CSR size |
 | ---------------------- | ---------- | -------- |

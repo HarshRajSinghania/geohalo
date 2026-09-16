@@ -48,6 +48,11 @@ The digests are also carefully **canonical**:
 - the spherical flag is mixed in as `b"sph"` / `b"flat"` so a corrected and an
   uncorrected stencil never collide.
 
+Geometry hashing uses vectorised WKB encoding. During stencil construction, the
+same encoded bytes are reused for extraction and hashing. The digest byte format
+is unchanged from the previous GeoJSON extraction path, so existing stencil and
+dependent reduce-operator cache entries remain valid.
+
 ## Backends
 
 === "LocalCache"
