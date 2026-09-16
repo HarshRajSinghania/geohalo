@@ -93,6 +93,7 @@ nav:
       - Latitude correction: concepts/latitude-correction.md
       - Mean-preserving downscaling: concepts/downscaling.md
       - The fused reduce operator: concepts/reduce-operator.md
+      - Chunk-aware reduction: concepts/restricted-operator.md
       - NaN-aware & weighted reduction: concepts/masked.md
       - Hierarchical rollups: concepts/bias-tree.md
   - Guides:

@@ -95,6 +95,17 @@ band, vertical level, …) and replaces `(latitude, longitude)` with a single
 `how={"mean", "sum"}`, a `weight_key` naming a per-cell weight variable, and
 `spherical_correction=False` to disable the latitude-area correction.
 
+For clean lazy grids, opt into chunk-aware reads with a precomputed fused operator:
+
+```python
+restricted = ghl.RestrictedOperator.from_grid(op, da)
+out = ghl.reduce_with_restricted_operator(da, restricted)
+```
+
+This loads only the contributing spatial chunks and processes batch chunks
+separately. See [chunk-aware reduction](https://campiohe.github.io/geohalo/concepts/restricted-operator/)
+for explicit chunk sizes, caching, and backend limitations.
+
 ## Documentation
 
 Everything is covered in depth at **<https://campiohe.github.io/geohalo/>**:

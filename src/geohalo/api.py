@@ -1,6 +1,7 @@
 """Public API: reduce(_with_stencil), resample_grid(_with_matrix), aggregate_bias(_with_tree)."""
 
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Hashable, Iterator
+from itertools import pairwise, product
 from typing import Literal
 
 import geopandas as gpd
@@ -12,7 +13,10 @@ from geohalo.bias_tree import BiasTree
 from geohalo.geometry import ensure_ascending_lats, same_grid, target_coords_from_resolution
 from geohalo.reduce_operator import ReduceOperator
 from geohalo.resampler import FactoredResampler, Resampler
+from geohalo.restricted_operator import RestrictedOperator, _grid_chunks
 from geohalo.stencil import Stencil
+
+_RESTRICTED_BATCH_BYTES = 8 * 1024 * 1024
 
 
 def _geom_coord(keys: pd.Index, geom_dim: str) -> pd.Index:
@@ -168,6 +172,109 @@ def reduce_with_operator[T: xr.DataArray | xr.Dataset](
         coords={**_carryover_coords(grid, batch_dims), geom_dim: _geom_coord(operator.keys, geom_dim)},
         name=grid.name,
         attrs=dict(grid.attrs),
+    )
+
+
+def _restricted_batch_slices(
+    grid: xr.DataArray, batch_dims: list[str], operator: RestrictedOperator,
+) -> Iterator[tuple[slice, ...]]:
+    """Use native batch chunks, or bounded blocks for unchunked batch dimensions."""
+    chunks = {dim: _grid_chunks(grid, dim) for dim in batch_dims}
+    largest_window = max(
+        ((rows.stop - rows.start) * (cols.stop - cols.start) for rows, cols in operator.windows),
+        default=0,
+    )
+    bytes_per_slice = (
+        (largest_window + operator.matrix.shape[1]) * grid.dtype.itemsize
+        + len(operator.keys) * np.result_type(grid.dtype, operator.matrix.dtype).itemsize
+    )
+    capacity = max(1, _RESTRICTED_BATCH_BYTES // max(1, bytes_per_slice))
+    for sizes in chunks.values():
+        if sizes:
+            capacity = max(1, capacity // max(sizes))
+    for dim in reversed(batch_dims):
+        if chunks[dim] is None:
+            size = grid.sizes[dim]
+            step = min(max(1, size), capacity)
+            count, tail = divmod(size, step)
+            chunks[dim] = (step,) * count + ((tail,) if tail else ())
+            capacity = max(1, capacity // step)
+    slices = []
+    for dim in batch_dims:
+        edges = np.cumsum((0, *chunks[dim]))
+        slices.append([slice(int(a), int(b)) for a, b in pairwise(edges)])
+    return product(*slices)
+
+
+def reduce_with_restricted_operator[T: xr.DataArray | xr.Dataset](
+    grid: T,
+    operator: RestrictedOperator,
+    *,
+    how: Literal["mean", "sum"] = "mean",
+    lat_dim: str = "latitude",
+    lon_dim: str = "longitude",
+    geom_dim: str = "geom",
+) -> T:
+    """Reduce clean data, reading only the plan's contributing spatial chunks.
+
+    Returns an eager result, preserving batch coordinates, names, and attrs.
+    Each batch chunk is processed separately; only one spatial window and its
+    gathered cells are held at a time. Without batch chunk metadata, blocks target
+    8 MiB of working data (at least one slice). Native chunks may exceed this.
+
+    Coordinates must match the plan's stored latitude order and longitude grid.
+    Known spatial chunk layouts must also match; rebuild the plan after changing
+    either. Dataset variables without both spatial dimensions pass through.
+    As with ``reduce_with_operator``, NaNs and per-cell weights require the
+    separate ``reduce_with_stencil`` path, especially when resampling is fused.
+    """
+    if how not in ("mean", "sum"):
+        raise ValueError(f"how must be 'mean' or 'sum', got {how!r}")
+    if isinstance(grid, xr.Dataset):
+        return _map_spatial_vars(
+            grid,
+            lambda da: reduce_with_restricted_operator(
+                da, operator, how=how, lat_dim=lat_dim, lon_dim=lon_dim, geom_dim=geom_dim,
+            ),
+            lat_dim, lon_dim,
+        )
+    _require_spatial_dims(grid, lat_dim, lon_dim)
+    if not same_grid(grid[lat_dim].to_numpy(), grid[lon_dim].to_numpy(), operator.source_lat, operator.source_lon):
+        raise ValueError("grid does not match the restricted operator's stored source grid (including latitude order)")
+    for dim, expected in ((lat_dim, operator.lat_chunks), (lon_dim, operator.lon_chunks)):
+        actual = _grid_chunks(grid, dim)
+        if actual is not None and actual != expected:
+            raise ValueError(f"{dim} chunks do not match the restricted operator; rebuild the plan for this layout")
+
+    batch_dims = [dim for dim in grid.dims if dim not in (lat_dim, lon_dim)]
+    batch_shape = tuple(grid.sizes[dim] for dim in batch_dims)
+    dtype = np.result_type(grid.dtype, operator.matrix.dtype)
+    out = np.zeros((*batch_shape, len(operator.keys)), dtype=dtype)
+    if operator.matrix.shape[1]:
+        for index in _restricted_batch_slices(grid, batch_dims, operator):
+            selection = dict(zip(batch_dims, index, strict=True))
+            shape = tuple(part.stop - part.start for part in index)
+            gathered = np.empty((*shape, operator.matrix.shape[1]), dtype=grid.dtype)
+            offset = 0
+            for (rows, cols), positions in zip(operator.windows, operator.gathers, strict=True):
+                # Slice BEFORE accessing values: backend arrays and Dask cull all
+                # unrelated chunks. Transposing the full backend array can load it.
+                window = grid.isel({**selection, lat_dim: rows, lon_dim: cols})
+                values = window.transpose(*batch_dims, lat_dim, lon_dim).to_numpy()
+                r, c = np.divmod(positions, cols.stop - cols.start)
+                gathered[..., offset:offset + len(positions)] = values[..., r, c]
+                offset += len(positions)
+                del values, window
+            result = out[index]
+            for batch in np.ndindex(shape):
+                result[batch] = operator.matrix @ gathered[batch]
+            del gathered
+    if how == "mean":
+        out = out / operator.row_sums
+    return xr.DataArray(
+        out, dims=(*batch_dims, geom_dim),
+        coords={**_carryover_coords(grid, batch_dims), geom_dim: _geom_coord(operator.keys, geom_dim)},
+        name=grid.name, attrs=dict(grid.attrs),
     )
 
 

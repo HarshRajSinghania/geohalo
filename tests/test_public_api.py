@@ -5,7 +5,8 @@ def test_public_exports() -> None:
     for name in ("reduce", "reduce_with_stencil", "resample_grid",
                  "resample_grid_with_matrix", "aggregate_bias",
                  "aggregate_bias_with_tree", "Stencil", "Resampler",
-                 "BiasTree", "LocalCache", "RedisCache", "EmptyOverlapError"):
+                 "BiasTree", "LocalCache", "RedisCache", "EmptyOverlapError",
+                 "ReduceOperator", "RestrictedOperator", "reduce_with_operator", "reduce_with_restricted_operator"):
         assert hasattr(geohalo, name), f"missing export: {name}"
 
 

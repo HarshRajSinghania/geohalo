@@ -106,8 +106,8 @@ and float64 precision are preserved, including for float32 input. Canonical
 matrices and disk/Redis cache payloads retain their existing format.
 
 This bounds the arithmetic's temporary memory; lazy inputs are still loaded in
-full by the xarray entry point. Reading only relevant storage chunks is separate
-work tracked in [#6](https://github.com/campiohe/geohalo/issues/6).
+full by this entry point. To read only contributing chunks, opt in to
+[`RestrictedOperator` and `reduce_with_restricted_operator`](restricted-operator.md).
 
 ## It's already your fast path
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add `RestrictedOperator`, `reduce_with_restricted_operator`, and local/Redis
+  read-plan caching for chunk-aware reduction of clean lazy grids
+  ([#6](https://github.com/campiohe/geohalo/issues/6)). Plans infer Dask/backend
+  chunk metadata or accept explicit irregular chunks, preserve stored latitude
+  order, and read disjoint windows containing only contributing spatial chunks.
+  Batch chunks are processed separately; results are eager. Existing reduction
+  entry points and missing-data semantics are unchanged.
 - Accelerate `BiasTree.compute` with depth-bounded sparse products instead of
   composing internal nodes one sparse row at a time
   ([#8](https://github.com/campiohe/geohalo/issues/8)). Weighted means and sums,
