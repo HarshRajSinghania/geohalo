@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.2.0 — 2026-09-16
+
 - Add `RestrictedOperator`, `reduce_with_restricted_operator`, and local/Redis
   read-plan caching for chunk-aware reduction of clean lazy grids
   ([#6](https://github.com/campiohe/geohalo/issues/6)). Plans infer Dask/backend
