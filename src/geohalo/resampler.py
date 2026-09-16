@@ -6,11 +6,18 @@ from dataclasses import dataclass
 import numpy as np
 import scipy.sparse as sp
 
-from geohalo.geometry import bilinear_matrix_1d, nearest_index
+from geohalo.geometry import bilinear_matrix_1d, ensure_ascending_lats, nearest_index
 
 
 @dataclass(frozen=True)
 class Resampler:
+    """Grid transform whose source columns use ascending latitude, then longitude.
+
+    Target rows retain the supplied coordinate order. Direct matrix callers must
+    flatten source values in ``(source_lat, source_lon)`` order; the xarray API
+    handles descending source latitudes automatically.
+    """
+
     transform_matrix: sp.csr_matrix
     source_lat: np.ndarray
     source_lon: np.ndarray
@@ -37,7 +44,7 @@ class Resampler:
     ) -> "Resampler":
         if iterations < 1:
             raise ValueError(f"iterations must be >= 1, got {iterations}")
-        source_lat = np.asarray(source_lat, dtype=np.float64)
+        source_lat, _ = ensure_ascending_lats(source_lat)
         source_lon = np.asarray(source_lon, dtype=np.float64)
         target_lat = np.asarray(target_lat, dtype=np.float64)
         target_lon = np.asarray(target_lon, dtype=np.float64)
@@ -126,6 +133,9 @@ class FactoredResampler:
     transform. This is the form the reduce path needs: `fuse_left` can compute
     ``w @ T`` for a thin ``w`` without ever materialising ``T`` (see
     :class:`~geohalo.reduce_operator.ReduceOperator`).
+
+    Source cells use ascending latitude, then the supplied longitude order,
+    matching :class:`Resampler`. Target cells retain the supplied order.
     """
 
     b: sp.csr_matrix
@@ -150,7 +160,7 @@ class FactoredResampler:
     ) -> "FactoredResampler":
         if iterations < 1:
             raise ValueError(f"iterations must be >= 1, got {iterations}")
-        source_lat = np.asarray(source_lat, dtype=np.float64)
+        source_lat, _ = ensure_ascending_lats(source_lat)
         source_lon = np.asarray(source_lon, dtype=np.float64)
         target_lat = np.asarray(target_lat, dtype=np.float64)
         target_lon = np.asarray(target_lon, dtype=np.float64)
@@ -169,7 +179,7 @@ class FactoredResampler:
         )
 
     def apply_flat(self, flat: np.ndarray) -> np.ndarray:
-        """Apply the transform to data laid out as (batch, n_source)."""
+        """Apply to (batch, n_source) values flattened in ascending latitude order."""
         xt = np.asarray(flat, dtype=np.float64).T
         y_op = self.b @ xt
         term = y_op
@@ -209,7 +219,8 @@ def resampler_digest(
     target_lon: np.ndarray,
     iterations: int,
 ) -> bytes:
-    """Cache key for a resampler, derivable from inputs without building it."""
+    """Cache key with ascending source latitudes; target order is significant."""
+    source_lat, _ = ensure_ascending_lats(source_lat)
     h = hashlib.sha256()
     for arr in (source_lat, source_lon, target_lat, target_lon):
         h.update(np.asarray(arr, dtype=np.float64).tobytes())

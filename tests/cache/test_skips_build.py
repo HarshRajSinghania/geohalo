@@ -3,12 +3,15 @@
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pytest
 import shapely
+import xarray as xr
 
 import geohalo.bias_tree as bias_tree_mod
 import geohalo.reduce_operator as reduce_operator_mod
 import geohalo.resampler as resampler_mod
 import geohalo.stencil as stencil_mod
+from geohalo.api import resample_grid_with_matrix
 from geohalo.cache import LocalCache
 
 
@@ -54,6 +57,29 @@ def test_resampler_hit_skips_compute(tmp_path, monkeypatch) -> None:
     cache.get_or_compute_resampler(s_lat, s_lon, t_lat, t_lon, iterations=2)
     cache.get_or_compute_resampler(s_lat, s_lon, t_lat, t_lon, iterations=2)
     assert counter.calls == 1
+
+
+@pytest.mark.parametrize("descending_first", [False, True])
+def test_resampler_hit_across_latitude_orders(tmp_path, monkeypatch, descending_first) -> None:
+    lats, lons = np.array([0.0, 1.0, 2.0]), np.array([0.0, 1.0])
+    target_lat, target_lon = np.linspace(0.0, 2.0, 5), np.linspace(0.0, 1.0, 3)
+    first_lat = lats[::-1] if descending_first else lats
+    cache = LocalCache(tmp_path)
+    counter = _CallCounter()
+    monkeypatch.setattr(resampler_mod.Resampler, "compute", counter.wrap(resampler_mod.Resampler.compute))
+
+    first = cache.get_or_compute_resampler(first_lat, lons, target_lat, target_lon)
+    cached = cache.get_or_compute_resampler(first_lat[::-1], lons, target_lat, target_lon)
+    assert counter.calls == 1
+    assert first.digest == cached.digest
+    np.testing.assert_array_equal(cached.source_lat, lats)
+    source = xr.DataArray(
+        np.broadcast_to(lats[:, None], (3, 2)), dims=("latitude", "longitude"),
+        coords={"latitude": lats, "longitude": lons},
+    )
+    actual = resample_grid_with_matrix(source.isel(latitude=slice(None, None, -1)), cached)
+    expected = resample_grid_with_matrix(source, first)
+    xr.testing.assert_identical(actual, expected)
 
 
 def test_tree_hit_skips_compute(tmp_path, monkeypatch) -> None:
