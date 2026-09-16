@@ -11,7 +11,7 @@ uv run python -m benchmarks.run
 ## The shape of the cost
 
 geohalo deliberately moves all the expensive work into a one-time precompute, leaving a
-hot path that is a single sparse · dense matmul.
+hot path that applies a precomputed sparse matrix to the grid values.
 
 ```mermaid
 flowchart LR
@@ -19,7 +19,7 @@ flowchart LR
         S["Stencil / ReduceOperator build<br/>exactextract + sparse assembly"]
     end
     subgraph each ["per grid slice — milliseconds"]
-        M["one matmul<br/>flat @ M.T"]
+        M["sparse products<br/>bounded batches or individual slices"]
     end
     S -.cache.-> M
 ```
@@ -56,9 +56,34 @@ a 50-member ensemble and `step=N` is `N` lead times.
 | 5571       | (member=50,)         | 50     | 1 (1 % NaN)  | 14 ms   |
 
 A batch of 50 grid slices over 5 571 polygons reduces in **single-digit milliseconds**. The
-cost scales with the number of slices (it is one matmul over the flattened batch), and the
+cost scales with the number of slices, and the
 [NaN-aware path](concepts/masked.md) costs roughly 2–3× the clean path for its second
 matmul.
+
+## Large-grid application memory
+
+The synthetic benchmark for [#5](https://github.com/campiohe/geohalo/issues/5)
+runs without external data:
+
+```bash
+uv run python -m benchmarks.operator_memory
+```
+
+It compares the previous sort-and-batch implementation with the current
+application path on a global 0.25° grid: 24 float32 slices (95.05 MiB), 90 polygons,
+and 15,210 matrix coefficients. A local run produced:
+
+| Latitude order | Previous extra peak | Current first-call peak | Current warm peak | Previous median | Current median |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ascending | 285.2 MiB | 0.540 MiB | 0.263 MiB | 78.00 ms | 3.16 ms |
+| Descending | 475.3 MiB | 0.545 MiB | 0.326 MiB | 134.26 ms | 2.56 ms |
+
+Results were identical in this run, retaining float64 arithmetic. Peaks are
+`tracemalloc` allocations during application, including output and any first-call
+preparation, but excluding the already allocated input and canonical matrix.
+They are not total process RSS. Timings are warmed medians of five calls and vary
+by hardware. The benchmark checks results against the previous product at
+`rtol=1e-12` and `atol=1e-12`.
 
 ## The fusion win
 

@@ -80,8 +80,9 @@ out = ghl.reduce(da, geoms, target_resolution=0.05, resample_iterations=3)
 
 ECMWF and many GRIB products ship latitudes **descending** (90 → −90). geohalo's
 `Resampler.compute` and `FactoredResampler.compute` canonicalise source latitudes
-to ascending order when building their matrices. The xarray apply helpers reorder
-descending input data to match, so you do not need to flip anything yourself.
+to ascending order when building their matrices. The xarray apply helpers map
+matrix columns to the input's stored latitude order, so you do not need to flip
+anything yourself or copy a descending grid into ascending order.
 Ascending and descending versions of the same source grid share one cache entry.
 
 `resample_grid_with_matrix` checks both latitude and longitude coordinates against
@@ -94,3 +95,12 @@ If you multiply `Resampler.transform_matrix` directly, or call
 and longitude in `source_lon` order. This corrects the convention in 1.1.0, where
 matrices built from descending latitudes expected descending values, causing the
 xarray helpers to flip north and south.
+
+## Application memory
+
+For large source grids, the xarray helpers apply the transform one batch slice at
+a time. Small contiguous grids use bounded batches. This avoids copying or
+casting every source slice at once while preserving the matrix's arithmetic
+precision. The dense target output still needs to fit in memory, alongside
+temporary storage for one source/target slice and cached matrix indices for
+descending latitudes. Lazy inputs are still loaded in full before application.
