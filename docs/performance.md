@@ -39,6 +39,33 @@ After the first build, a [cache](guides/caching.md) hit loads in milliseconds �
 ~30–46× speedup for stencils, and **thousands of times** for a refined
 [`ReduceOperator`](concepts/reduce-operator.md).
 
+### Detailed polygons: WKB versus GeoJSON
+
+The synthetic benchmark for [#7](https://github.com/campiohe/geohalo/issues/7)
+isolates stencil construction with detailed boundaries:
+
+```bash
+uv run python -m benchmarks.stencil_build
+```
+
+On 3,000 synthetic polygons with 6,003,000 vertices and a global 0.25° grid, a
+local run measured these medians over three complete builds:
+
+| Geometry input | Build time |
+| --- | ---: |
+| Previous GeoJSON path | 15.731 s |
+| Current WKB path | 1.079 s |
+
+This was a **14.6× speedup**, with identical CSR matrices, row sums, polygon keys,
+and cache digests. Both paths include sorting, geometry serialization,
+exactextract coverage, sparse assembly, and hashing; polygon generation is
+excluded. The WKB path also reuses its encoded geometries for the digest.
+
+Environment: Python 3.14.4, exactextract 0.3.0, Shapely 2.1.2, NumPy 2.4.6,
+SciPy 1.17.1, and GeoPandas 1.1.3. Timings depend on hardware and polygon
+complexity; the earlier GADM table uses different polygons and is a separate
+historical measurement.
+
 ## Hot path — pay per slice
 
 All rows below aggregate to GADM Brazil L2 (~5570 municipalities) on a 0.25° grid over

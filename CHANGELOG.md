@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Accelerate stencil construction by passing vectorised WKB geometries directly
+  to exactextract and reusing those bytes for the geometry digest
+  ([#7](https://github.com/campiohe/geohalo/issues/7)). Coverage matrices, polygon
+  key ordering, and cache digests are unchanged. Missing geometries passed to
+  `Stencil.compute` now raise `ValueError` before native extraction.
 - Reduce temporary memory when applying `ReduceOperator` to large grids
   ([#5](https://github.com/campiohe/geohalo/issues/5)): gather contributing cells
   one batch slice at a time and reuse the compact column mapping. Resampling

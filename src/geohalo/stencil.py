@@ -1,7 +1,7 @@
 """Stencil: per-geom x per-cell area coverage. EmptyOverlapError lives here."""
 
 import hashlib
-from collections.abc import Hashable
+from collections.abc import Hashable, Iterator
 from dataclasses import dataclass, field
 
 import geopandas as gpd
@@ -10,15 +10,53 @@ import pandas as pd
 import scipy.sparse as sp
 import shapely
 from exactextract import exact_extract
+from exactextract.feature import Feature, FeatureSource
 from exactextract.raster import NumPyRasterSource
 
 from geohalo.geometry import (
+    _geom_digest_from_wkb,
     cell_areas,
     ensure_ascending_lats,
     geom_digest,
     grid_digest,
     require_regular_grid,
 )
+
+
+class _WKBFeature(Feature):
+    """Read-only geometry feature; stencil extraction copies no attributes."""
+
+    def __init__(self, wkb: bytes) -> None:
+        super().__init__()
+        self._wkb = wkb
+
+    def geometry(self) -> bytes:
+        return self._wkb
+
+    def fields(self) -> list[str]:
+        return []
+
+    def set_geometry_format(self) -> str:
+        return "wkb"
+
+
+class _WKBFeatureSource(FeatureSource):
+    """Feed pre-encoded geometry bytes directly to exactextract."""
+
+    def __init__(self, wkb: np.ndarray) -> None:
+        super().__init__()
+        self._wkb = wkb
+
+    def count(self) -> int:
+        return len(self._wkb)
+
+    def __iter__(self) -> Iterator[_WKBFeature]:
+        for wkb in self._wkb:
+            yield _WKBFeature(wkb)
+
+    def srs_wkt(self) -> None:
+        # Match the previous GeoJSON input: the grid and polygons are EPSG:4326.
+        return None
 
 
 class EmptyOverlapError(Exception):
@@ -68,11 +106,18 @@ class Stencil:
 
         order = np.argsort([repr(k) for k in geoms.index])
         sorted_geoms = geoms.iloc[order]
+        if sorted_geoms.isna().any():
+            # exactextract's native WKB reader cannot safely handle a null geometry.
+            raise ValueError("geoms contains missing geometries; expected polygons")
+        wkb = shapely.to_wkb(sorted_geoms.to_numpy())
 
         matrix = _build_occupancy_matrix(
-            lats_asc, lons_arr, sorted_geoms, spherical_correction=spherical_correction,
+            lats_asc, lons_arr, sorted_geoms.index, wkb, spherical_correction=spherical_correction,
         )
-        digest = stencil_digest(lats_asc, lons_arr, geoms, spherical_correction=spherical_correction)
+        digest = _stencil_digest_from_geometry_digest(
+            lats_asc, lons_arr, _geom_digest_from_wkb(sorted_geoms.index, wkb),
+            spherical_correction=spherical_correction,
+        )
         return cls(
             occupancy_matrix=matrix,
             keys=sorted_geoms.index,
@@ -86,7 +131,8 @@ class Stencil:
 def _build_occupancy_matrix(
     lats: np.ndarray,
     lons: np.ndarray,
-    geoms: gpd.GeoSeries,
+    keys: pd.Index,
+    wkb: np.ndarray,
     *,
     spherical_correction: bool,
 ) -> sp.csr_matrix:
@@ -97,17 +143,14 @@ def _build_occupancy_matrix(
     ymin = float(lats[0] - (lats[1] - lats[0]) / 2)
     ymax = float(lats[-1] + (lats[-1] - lats[-2]) / 2)
     src = NumPyRasterSource(template, xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
-    features = [
-        {"type": "Feature", "geometry": shapely.geometry.mapping(g), "properties": {"i": i}}
-        for i, g in enumerate(geoms.to_numpy())
-    ]
+    features = _WKBFeatureSource(wkb)
     df = exact_extract(src, features, ops=["cell_id", "coverage"], output="pandas", include_cols=[])
 
     areas = cell_areas(lats, lons, spherical=spherical_correction)
     rows: list[np.ndarray] = []
     cols: list[np.ndarray] = []
     data: list[np.ndarray] = []
-    for i, key in enumerate(geoms.index):
+    for i, key in enumerate(keys):
         cell_ids = np.asarray(df.iloc[i]["cell_id"], dtype=np.int64)
         coverage = np.asarray(df.iloc[i]["coverage"], dtype=np.float64)
         if cell_ids.size == 0:
@@ -124,7 +167,7 @@ def _build_occupancy_matrix(
 
     return sp.csr_matrix(
         (np.concatenate(data), (np.concatenate(rows), np.concatenate(cols))),
-        shape=(len(geoms), n_lat * n_lon),
+        shape=(len(keys), n_lat * n_lon),
     )
 
 
@@ -143,8 +186,21 @@ def stencil_digest(
     """
     lats_asc, _ = ensure_ascending_lats(lats)
     lons_arr = np.asarray(lons, dtype=np.float64)
+    return _stencil_digest_from_geometry_digest(
+        lats_asc, lons_arr, geom_digest(geoms), spherical_correction=spherical_correction,
+    )
+
+
+def _stencil_digest_from_geometry_digest(
+    lats: np.ndarray,
+    lons: np.ndarray,
+    geometry_digest: bytes,
+    *,
+    spherical_correction: bool,
+) -> bytes:
+    """Combine canonical grid coordinates with an already-computed geometry digest."""
     h = hashlib.sha256()
-    h.update(grid_digest(lats_asc, lons_arr))
+    h.update(grid_digest(lats, lons))
     h.update(b"sph" if spherical_correction else b"flat")
-    h.update(geom_digest(geoms))
+    h.update(geometry_digest)
     return h.digest()

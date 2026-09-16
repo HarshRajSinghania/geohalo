@@ -4,6 +4,7 @@ import hashlib
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import scipy.sparse as sp
 import shapely
 
@@ -88,11 +89,16 @@ def geom_digest(geoms: gpd.GeoSeries) -> bytes:
     """SHA-256 of sorted-key (repr(key), WKB(geom)) pairs. Order-invariant."""
     order = np.argsort([repr(k) for k in geoms.index])
     sorted_geoms = geoms.iloc[order]
+    return _geom_digest_from_wkb(sorted_geoms.index, shapely.to_wkb(sorted_geoms.to_numpy()))
+
+
+def _geom_digest_from_wkb(keys: pd.Index, wkb: np.ndarray) -> bytes:
+    """Hash keys already sorted by repr and their matching WKB bytes."""
     h = hashlib.sha256()
-    h.update(repr(tuple(geoms.index.names)).encode())
-    for key, geom in zip(sorted_geoms.index, sorted_geoms.to_numpy(), strict=True):
+    h.update(repr(tuple(keys.names)).encode())
+    for key, encoded in zip(keys, wkb, strict=True):
         h.update(repr(key).encode())
-        h.update(shapely.to_wkb(geom))
+        h.update(encoded)
     return h.digest()
 
 
